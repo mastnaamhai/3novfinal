@@ -3,6 +3,7 @@ services:
     name: rambilas-backend
     env: node
     plan: free
+    rootDir: rambilasversion2/backend
     buildCommand: npm install && npm run build
     startCommand: npm start
     envVars:
