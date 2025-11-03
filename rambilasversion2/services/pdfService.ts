@@ -111,41 +111,108 @@ export const generatePdf = async (elementId: string, options: PDFOptions): Promi
       }
     }
     
-    const canvas = await html2canvas(input, {
+    // For invoices, get the bounding rect to ensure proper capture from left edge
+    let captureElement = input;
+    let captureX = 0;
+    let captureY = 0;
+    
+    if (isInvoice) {
+      const innerInvoice = document.getElementById('invoice-pdf');
+      if (innerInvoice) {
+        const containerRect = input.getBoundingClientRect();
+        const innerRect = innerInvoice.getBoundingClientRect();
+        // Calculate offset from container to inner element
+        captureX = innerRect.left - containerRect.left;
+        captureY = innerRect.top - containerRect.top;
+        // Use inner invoice element for better capture
+        captureElement = innerInvoice;
+      }
+    }
+    
+    // Calculate dimensions including overflow for proper capture
+    const elementRect = captureElement.getBoundingClientRect();
+    const fullWidth = Math.max(captureElement.scrollWidth, captureElement.offsetWidth, elementRect.width);
+    const fullHeight = Math.max(captureElement.scrollHeight, captureElement.offsetHeight, elementRect.height);
+    
+    // For invoices, ensure we capture the full specified width
+    let captureWidth = fullWidth;
+    let captureHeight = fullHeight;
+    
+    if (isInvoice) {
+      const innerInvoice = document.getElementById('invoice-pdf');
+      if (innerInvoice) {
+        // Get the actual computed width (should be 420mm = ~1587px at 96 DPI)
+        const computedStyle = window.getComputedStyle(innerInvoice);
+        const widthValue = computedStyle.width;
+        if (widthValue && widthValue.includes('mm')) {
+          const mmValue = parseFloat(widthValue);
+          // Convert mm to pixels at 96 DPI: 1mm = 3.779527559 pixels
+          const pxValue = mmValue * 3.779527559;
+          captureWidth = Math.max(captureWidth, pxValue);
+        } else if (widthValue && widthValue.includes('px')) {
+          captureWidth = Math.max(captureWidth, parseFloat(widthValue));
+        }
+        // Ensure we capture all content including header with padding
+        captureHeight = Math.max(captureHeight, innerInvoice.scrollHeight, innerInvoice.offsetHeight);
+      }
+    }
+    
+    const canvas = await html2canvas(captureElement, {
       scale: qualitySettings.scale,
       useCORS: true,
       allowTaint: true,
       backgroundColor: '#ffffff',
       logging: false,
-      width: input.scrollWidth,
-      height: input.scrollHeight,
-      windowWidth: input.scrollWidth,
-      windowHeight: input.scrollHeight,
+      width: captureWidth,
+      height: captureHeight,
+      windowWidth: captureWidth,
+      windowHeight: captureHeight,
       scrollX: 0,
       scrollY: 0,
       x: 0,
       y: 0,
+      // Capture overflow content including absolutely positioned elements
+      ignoreElements: (element) => {
+        // Don't ignore any elements - capture everything
+        return false;
+      },
       // Disable letterRendering for invoices - can cause corruption
       letterRendering: false,
       // Remove any transforms before capturing and clean up container styling
       onclone: (clonedDoc: Document) => {
-        const clonedElement = clonedDoc.getElementById(elementId);
+        // For invoices, we capture the inner invoice-pdf element directly
+        const targetId = isInvoice && captureElement.id ? captureElement.id : elementId;
+        const clonedElement = clonedDoc.getElementById(targetId);
         if (clonedElement) {
           const clonedEl = clonedElement as HTMLElement;
           
-          // Explicit check for invoice-pdf-container element by ID
+          // Explicit check for invoice-pdf-container element by ID (still need to clean it)
           const invoiceContainer = clonedDoc.getElementById('invoice-pdf-container');
           if (invoiceContainer) {
             const containerEl = invoiceContainer as HTMLElement;
             // Force remove bg-gray-300, p-4 classes from container
             containerEl.classList.remove('bg-gray-300', 'bg-gray-200', 'bg-gray-100', 'p-4', 'p-8', 'p-2', 'p-6');
-            // Set transparent background and remove padding/margin
+            // Set transparent background and remove padding/margin - CRITICAL for preventing left-side cropping
             containerEl.style.backgroundColor = 'transparent';
             containerEl.style.padding = '0';
             containerEl.style.margin = '0';
+            // Remove flexbox centering that might offset content
+            containerEl.style.justifyContent = 'flex-start';
+            containerEl.style.alignItems = 'flex-start';
             // Remove any inline padding styles
             if (containerEl.style.padding && containerEl.style.padding.includes('px')) {
               containerEl.style.padding = '0';
+            }
+            // Find and fix wrapper div that has transform scale
+            const wrapperDiv = containerEl.querySelector('div[style*="transform"]');
+            if (wrapperDiv) {
+              const wrapper = wrapperDiv as HTMLElement;
+              wrapper.style.transform = 'none';
+              wrapper.style.margin = '0';
+              wrapper.style.padding = '0';
+              wrapper.style.position = 'relative';
+              wrapper.style.left = '0';
+              wrapper.style.top = '0';
             }
           }
           
@@ -154,7 +221,7 @@ export const generatePdf = async (elementId: string, options: PDFOptions): Promi
           clonedEl.classList.remove('bg-gray-300', 'bg-gray-200', 'bg-gray-100', 'p-4', 'p-8', 'p-2', 'p-6');
           
           // Remove background colors from inline styles and computed styles
-          const computedStyle = window.getComputedStyle(input);
+          const computedStyle = window.getComputedStyle(captureElement);
           if (computedStyle.backgroundColor && 
               (computedStyle.backgroundColor.includes('rgb(209, 213, 219)') || // gray-300
                computedStyle.backgroundColor.includes('rgb(229, 231, 235)') || // gray-200
@@ -202,15 +269,33 @@ export const generatePdf = async (elementId: string, options: PDFOptions): Promi
           });
           
           // Also reset transforms in child elements (for invoice-pdf-container wrapper case)
-          const innerInvoice = clonedDoc.getElementById('invoice-pdf');
-          if (innerInvoice) {
-            (innerInvoice as HTMLElement).style.transform = 'none';
-            // Ensure proper width for landscape invoices - use computed width from original
-            if (isInvoice) {
+          // If we're capturing invoice-pdf directly, ensure it has proper styling
+          if (isInvoice) {
+            const innerInvoice = clonedDoc.getElementById('invoice-pdf');
+            if (innerInvoice) {
+              const innerInvoiceEl = innerInvoice as HTMLElement;
+              innerInvoiceEl.style.transform = 'none';
+              innerInvoiceEl.style.margin = '0';
+              innerInvoiceEl.style.position = 'relative';
+              innerInvoiceEl.style.left = '0';
+              innerInvoiceEl.style.top = '0';
+              // Ensure proper width for landscape invoices - use computed width from original
               const originalInnerInvoice = document.getElementById('invoice-pdf');
               if (originalInnerInvoice) {
                 const computedWidth = window.getComputedStyle(originalInnerInvoice).width;
-                (innerInvoice as HTMLElement).style.width = computedWidth || '420mm';
+                innerInvoiceEl.style.width = computedWidth || '420mm';
+                // Ensure overflow is visible to capture all content
+                innerInvoiceEl.style.overflow = 'visible';
+              }
+              // Ensure header section has proper spacing to prevent clipping
+              const headerSection = innerInvoice.querySelector('div[style*="position: relative"]');
+              if (headerSection) {
+                const headerEl = headerSection as HTMLElement;
+                // Ensure top padding is preserved
+                const computedPadding = window.getComputedStyle(originalInnerInvoice?.querySelector('div[style*="position: relative"]') as HTMLElement || innerInvoiceEl).paddingTop;
+                if (parseFloat(computedPadding || '0') < 20) {
+                  headerEl.style.paddingTop = '24px';
+                }
               }
             }
           }
@@ -259,12 +344,23 @@ export const generatePdf = async (elementId: string, options: PDFOptions): Promi
           
           // Ensure proper width for landscape invoices on the container
           if (isInvoice) {
-            const computedWidth = window.getComputedStyle(input).width;
-            clonedEl.style.width = computedWidth || '420mm';
+            const innerInvoice = clonedDoc.getElementById('invoice-pdf');
+            if (innerInvoice) {
+              const innerInvoiceEl = innerInvoice as HTMLElement;
+              const originalInner = document.getElementById('invoice-pdf');
+              if (originalInner) {
+                const computedWidth = window.getComputedStyle(originalInner).width;
+                innerInvoiceEl.style.width = computedWidth || '420mm';
+              }
+            }
             // Ensure container has no background and no padding for full-page printing
             clonedEl.style.backgroundColor = 'transparent';
             clonedEl.style.padding = '0';
             clonedEl.style.margin = '0';
+            // Remove any positioning that might offset content
+            clonedEl.style.position = 'relative';
+            clonedEl.style.left = '0';
+            clonedEl.style.top = '0';
           }
         }
       }
@@ -317,20 +413,31 @@ export const generatePdf = async (elementId: string, options: PDFOptions): Promi
       const canvasHeight = retryCanvas.height;
       
       const isLandscapeInvoice = options.orientation === 'landscape' && elementId.includes('invoice');
+      // 0.2 inches = 14.4 points (1 inch = 72 points)
       const margins = options.margins || (isLandscapeInvoice 
-        ? { top: 0, right: 0, bottom: 0, left: 0 }
+        ? { top: 14.4, right: 14.4, bottom: 14.4, left: 14.4 }
         : { top: 20, right: 20, bottom: 20, left: 20 });
       const contentWidth = pdfWidth - margins.left - margins.right;
       const contentHeight = pdfHeight - margins.top - margins.bottom;
 
       const widthRatio = contentWidth / canvasWidth;
       const heightRatio = contentHeight / canvasHeight;
-      const scale = Math.min(widthRatio, heightRatio);
+      
+      // For landscape invoices, prioritize filling width to avoid blank space on sides
+      let scale: number;
+      if (isLandscapeInvoice) {
+        // Fill full width for edge-to-edge printing
+        scale = widthRatio;
+      } else {
+        // For other documents, maintain aspect ratio
+        scale = Math.min(widthRatio, heightRatio);
+      }
       
       let imgWidth = canvasWidth * scale;
       let imgHeight = canvasHeight * scale;
 
-      const x = margins.left + (contentWidth - imgWidth) / 2;
+      // Position content - for landscape invoices, align to left edge (x=0)
+      const x = isLandscapeInvoice ? margins.left : margins.left + (contentWidth - imgWidth) / 2;
       const y = margins.top + (contentHeight - imgHeight) / 2;
 
       pdf.addImage(imgData, 'PNG', x, y, imgWidth, imgHeight, undefined, qualitySettings.compression);
@@ -357,10 +464,10 @@ export const generatePdf = async (elementId: string, options: PDFOptions): Promi
     const canvasHeight = canvas.height;
     const ratio = canvasWidth / canvasHeight;
 
-    // Apply margins - use zero margins for landscape invoices for edge-to-edge printing
+    // Apply margins - use 0.2 inch margins for landscape invoices (14.4 points = 0.2 inches)
     const isLandscapeInvoice = options.orientation === 'landscape' && elementId.includes('invoice');
     const margins = options.margins || (isLandscapeInvoice 
-      ? { top: 0, right: 0, bottom: 0, left: 0 }
+      ? { top: 14.4, right: 14.4, bottom: 14.4, left: 14.4 }
       : { top: 20, right: 20, bottom: 20, left: 20 });
     const contentWidth = pdfWidth - margins.left - margins.right;
     const contentHeight = pdfHeight - margins.top - margins.bottom;
@@ -368,13 +475,23 @@ export const generatePdf = async (elementId: string, options: PDFOptions): Promi
     // Auto-fit: Calculate scale to fill entire page edge-to-edge
     const widthRatio = contentWidth / canvasWidth;
     const heightRatio = contentHeight / canvasHeight;
-    const scale = Math.min(widthRatio, heightRatio);
+    
+    // For landscape invoices, prioritize filling width to avoid blank space on sides
+    let scale: number;
+    if (isLandscapeInvoice) {
+      // Fill full width for edge-to-edge printing
+      scale = widthRatio;
+    } else {
+      // For other documents, maintain aspect ratio
+      scale = Math.min(widthRatio, heightRatio);
+    }
     
     let imgWidth = canvasWidth * scale;
     let imgHeight = canvasHeight * scale;
 
-    // Center the content (or position at edges for true edge-to-edge)
-    const x = margins.left + (contentWidth - imgWidth) / 2;
+    // Position content - for landscape invoices, align to left edge (x=0)
+    // For others, center the content
+    const x = isLandscapeInvoice ? margins.left : margins.left + (contentWidth - imgWidth) / 2;
     const y = margins.top + (contentHeight - imgHeight) / 2;
 
     pdf.addImage(imgData, 'PNG', x, y, imgWidth, imgHeight, undefined, qualitySettings.compression);
@@ -988,8 +1105,8 @@ export const generateDocumentPdf = async (
   if (documentType === 'invoice') {
     options.orientation = 'landscape';
     options.format = 'a4';
-    // For invoices, use zero margins for edge-to-edge printing
-    options.margins = { top: 0, right: 0, bottom: 0, left: 0 };
+    // For invoices, use 0.2 inch margins on all sides (14.4 points = 0.2 inches)
+    options.margins = { top: 14.4, right: 14.4, bottom: 14.4, left: 14.4 };
   } else {
     options.orientation = 'portrait';
     options.format = 'a4';
@@ -1051,49 +1168,108 @@ export const printToPdfFile = async (elementId: string, options: PrintOptions & 
       }
     }
     
+    // For invoices, get the inner invoice element for direct capture
+    let captureElement = input;
+    
+    if (isInvoice) {
+      const innerInvoice = document.getElementById('invoice-pdf');
+      if (innerInvoice) {
+        // Use inner invoice element for better capture without container padding issues
+        captureElement = innerInvoice;
+      }
+    }
+    
+    // Calculate dimensions including overflow for proper capture
+    const elementRect = captureElement.getBoundingClientRect();
+    const fullWidth = Math.max(captureElement.scrollWidth, captureElement.offsetWidth, elementRect.width);
+    const fullHeight = Math.max(captureElement.scrollHeight, captureElement.offsetHeight, elementRect.height);
+    
+    // For invoices, ensure we capture the full specified width
+    let captureWidth = fullWidth;
+    let captureHeight = fullHeight;
+    
+    if (isInvoice) {
+      const innerInvoice = document.getElementById('invoice-pdf');
+      if (innerInvoice) {
+        // Get the actual computed width (should be 420mm = ~1587px at 96 DPI)
+        const computedStyle = window.getComputedStyle(innerInvoice);
+        const widthValue = computedStyle.width;
+        if (widthValue && widthValue.includes('mm')) {
+          const mmValue = parseFloat(widthValue);
+          // Convert mm to pixels at 96 DPI: 1mm = 3.779527559 pixels
+          const pxValue = mmValue * 3.779527559;
+          captureWidth = Math.max(captureWidth, pxValue);
+        } else if (widthValue && widthValue.includes('px')) {
+          captureWidth = Math.max(captureWidth, parseFloat(widthValue));
+        }
+        // Ensure we capture all content including header with padding
+        captureHeight = Math.max(captureHeight, innerInvoice.scrollHeight, innerInvoice.offsetHeight);
+      }
+    }
+    
     // Enhanced canvas options
-    const canvas = await html2canvas(input, {
+    const canvas = await html2canvas(captureElement, {
       scale: qualitySettings.scale,
       useCORS: true,
       allowTaint: true,
       backgroundColor: '#ffffff',
       logging: false,
-      width: input.scrollWidth,
-      height: input.scrollHeight,
-      windowWidth: input.scrollWidth,
-      windowHeight: input.scrollHeight,
+      width: captureWidth,
+      height: captureHeight,
+      windowWidth: captureWidth,
+      windowHeight: captureHeight,
       scrollX: 0,
       scrollY: 0,
       x: 0,
       y: 0,
+      // Capture overflow content including absolutely positioned elements
+      ignoreElements: (element) => {
+        // Don't ignore any elements - capture everything
+        return false;
+      },
       // Disable letterRendering - can cause corruption with complex layouts
       letterRendering: false,
       onclone: (clonedDoc: Document) => {
         // Ensure all styles are preserved in cloned document and clean up container styling
-        const clonedElement = clonedDoc.getElementById(elementId);
+        const targetId = isInvoice && captureElement.id ? captureElement.id : elementId;
+        const clonedElement = clonedDoc.getElementById(targetId);
         if (clonedElement) {
           const clonedEl = clonedElement as HTMLElement;
           
-          // Explicit check for invoice-pdf-container element by ID
+          // Explicit check for invoice-pdf-container element by ID (still need to clean it)
           const invoiceContainer = clonedDoc.getElementById('invoice-pdf-container');
           if (invoiceContainer) {
             const containerEl = invoiceContainer as HTMLElement;
             // Force remove bg-gray-300, p-4 classes from container
             containerEl.classList.remove('bg-gray-300', 'bg-gray-200', 'bg-gray-100', 'p-4', 'p-8', 'p-2', 'p-6');
-            // Set transparent background and remove padding/margin
+            // Set transparent background and remove padding/margin - CRITICAL for preventing left-side cropping
             containerEl.style.backgroundColor = 'transparent';
             containerEl.style.padding = '0';
             containerEl.style.margin = '0';
+            // Remove flexbox centering that might offset content
+            containerEl.style.justifyContent = 'flex-start';
+            containerEl.style.alignItems = 'flex-start';
             // Remove any inline padding styles
             if (containerEl.style.padding && containerEl.style.padding.includes('px')) {
               containerEl.style.padding = '0';
+            }
+            // Find and fix wrapper div that has transform scale
+            const wrapperDiv = containerEl.querySelector('div[style*="transform"]');
+            if (wrapperDiv) {
+              const wrapper = wrapperDiv as HTMLElement;
+              wrapper.style.transform = 'none';
+              wrapper.style.margin = '0';
+              wrapper.style.padding = '0';
+              wrapper.style.position = 'relative';
+              wrapper.style.left = '0';
+              wrapper.style.top = '0';
             }
           }
           
           // Remove grey backgrounds and padding from container elements
           clonedEl.classList.remove('bg-gray-300', 'bg-gray-200', 'bg-gray-100', 'p-4', 'p-8', 'p-2', 'p-6');
           
-          const computedStyle = window.getComputedStyle(input);
+          const computedStyle = window.getComputedStyle(captureElement);
           if (computedStyle.backgroundColor && 
               (computedStyle.backgroundColor.includes('rgb(209, 213, 219)') ||
                computedStyle.backgroundColor.includes('rgb(229, 231, 235)') ||
@@ -1140,15 +1316,34 @@ export const printToPdfFile = async (elementId: string, options: PrintOptions & 
           });
           
           // Also reset transforms in child elements (for invoice-pdf-container wrapper case)
-          const innerInvoice = clonedDoc.getElementById('invoice-pdf');
-          if (innerInvoice) {
-            (innerInvoice as HTMLElement).style.transform = 'none';
-            // For invoices, ensure proper width for landscape - use computed width from original
-            if (isInvoice) {
+          // If we're capturing invoice-pdf directly, ensure it has proper styling
+          if (isInvoice) {
+            const innerInvoice = clonedDoc.getElementById('invoice-pdf');
+            if (innerInvoice) {
+              const innerInvoiceEl = innerInvoice as HTMLElement;
+              innerInvoiceEl.style.transform = 'none';
+              innerInvoiceEl.style.margin = '0';
+              innerInvoiceEl.style.position = 'relative';
+              innerInvoiceEl.style.left = '0';
+              innerInvoiceEl.style.top = '0';
+              // For invoices, ensure proper width for landscape - use computed width from original
               const originalInnerInvoice = document.getElementById('invoice-pdf');
               if (originalInnerInvoice) {
                 const computedWidth = window.getComputedStyle(originalInnerInvoice).width;
-                (innerInvoice as HTMLElement).style.width = computedWidth || '420mm';
+                innerInvoiceEl.style.width = computedWidth || '420mm';
+                // Ensure overflow is visible to capture all content
+                innerInvoiceEl.style.overflow = 'visible';
+              }
+              // Ensure header section has proper spacing to prevent clipping
+              const headerSection = innerInvoice.querySelector('div[style*="position: relative"]');
+              if (headerSection) {
+                const headerEl = headerSection as HTMLElement;
+                // Ensure top padding is preserved
+                const originalHeader = originalInnerInvoice?.querySelector('div[style*="position: relative"]') as HTMLElement;
+                const computedPadding = originalHeader ? window.getComputedStyle(originalHeader).paddingTop : '0';
+                if (parseFloat(computedPadding || '0') < 20) {
+                  headerEl.style.paddingTop = '24px';
+                }
               }
             }
           }
@@ -1210,6 +1405,10 @@ export const printToPdfFile = async (elementId: string, options: PrintOptions & 
             clonedEl.style.backgroundColor = 'transparent';
             clonedEl.style.padding = '0';
             clonedEl.style.margin = '0';
+            // Remove any positioning that might offset content
+            clonedEl.style.position = 'relative';
+            clonedEl.style.left = '0';
+            clonedEl.style.top = '0';
           }
         }
       }
@@ -1264,20 +1463,31 @@ export const printToPdfFile = async (elementId: string, options: PrintOptions & 
       const canvasWidth = retryCanvas.width;
       const canvasHeight = retryCanvas.height;
 
+      // 0.2 inches = 14.4 points (1 inch = 72 points)
       const margins = isInvoice && orientation === 'landscape' 
-        ? { top: 0, right: 0, bottom: 0, left: 0 }
+        ? { top: 14.4, right: 14.4, bottom: 14.4, left: 14.4 }
         : { top: 20, right: 20, bottom: 20, left: 20 };
       const contentWidth = pdfWidth - margins.left - margins.right;
       const contentHeight = pdfHeight - margins.top - margins.bottom;
 
       const widthRatio = contentWidth / canvasWidth;
       const heightRatio = contentHeight / canvasHeight;
-      const scale = Math.min(widthRatio, heightRatio);
+      
+      // For landscape invoices, prioritize filling width to avoid blank space on sides
+      let scale: number;
+      if (isInvoice && orientation === 'landscape') {
+        // Fill full width for edge-to-edge printing
+        scale = widthRatio;
+      } else {
+        // For other documents, maintain aspect ratio
+        scale = Math.min(widthRatio, heightRatio);
+      }
       
       let imgWidth = canvasWidth * scale;
       let imgHeight = canvasHeight * scale;
 
-      const x = margins.left + (contentWidth - imgWidth) / 2;
+      // Position content - for landscape invoices, align to left edge (x=0)
+      const x = (isInvoice && orientation === 'landscape') ? margins.left : margins.left + (contentWidth - imgWidth) / 2;
       const y = margins.top + (contentHeight - imgHeight) / 2;
 
       pdf.addImage(imgData, 'PNG', x, y, imgWidth, imgHeight, undefined, qualitySettings.compression);
@@ -1326,16 +1536,24 @@ export const printToPdfFile = async (elementId: string, options: PrintOptions & 
     const contentHeight = pdfHeight - margins.top - margins.bottom;
 
     // For landscape invoices, scale to fill entire page edge-to-edge
-    // Calculate scale to fit both width and height while maintaining aspect ratio
+    // For invoices, prioritize filling width to avoid blank space on sides
     const widthRatio = contentWidth / canvasWidth;
     const heightRatio = contentHeight / canvasHeight;
-    const scale = Math.min(widthRatio, heightRatio);
+    
+    let scale: number;
+    if (isInvoice && orientation === 'landscape') {
+      // Fill full width for edge-to-edge printing
+      scale = widthRatio;
+    } else {
+      // For other documents, maintain aspect ratio
+      scale = Math.min(widthRatio, heightRatio);
+    }
     
     let imgWidth = canvasWidth * scale;
     let imgHeight = canvasHeight * scale;
 
-    // Center the content (or align to edges for edge-to-edge)
-    const x = margins.left + (contentWidth - imgWidth) / 2;
+    // Position content - for landscape invoices, align to left edge (x=0) for edge-to-edge
+    const x = (isInvoice && orientation === 'landscape') ? margins.left : margins.left + (contentWidth - imgWidth) / 2;
     const y = margins.top + (contentHeight - imgHeight) / 2;
 
     // Add image to PDF

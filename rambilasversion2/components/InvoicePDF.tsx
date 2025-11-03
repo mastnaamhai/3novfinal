@@ -68,7 +68,7 @@ export const InvoiceView: React.FC<InvoiceViewProps> = ({ invoice, companyInfo, 
     const hasDeliveryDate = (invoice.lorryReceipts || []).some(lr => lr.deliveryDate);
 
     return (
-        <div id="invoice-pdf" className="bg-white p-4 text-base font-sans" style={{ width: INVOICE_WIDTH, minHeight: INVOICE_HEIGHT, fontFamily: 'sans-serif', lineHeight: '1.3', margin: '0 auto' }}>
+        <div id="invoice-pdf" className="bg-white p-4 text-base font-sans" style={{ width: INVOICE_WIDTH, minHeight: INVOICE_HEIGHT, fontFamily: 'sans-serif', lineHeight: '1.3', margin: '0 auto', overflow: 'visible', boxSizing: 'border-box' }}>
             <style>{`
                 /* Apply landscape styles to both screen and print */
                 #invoice-pdf {
@@ -80,6 +80,8 @@ export const InvoiceView: React.FC<InvoiceViewProps> = ({ invoice, companyInfo, 
                     background: white;
                     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
                     border-radius: 8px;
+                    overflow: visible !important;
+                    box-sizing: border-box !important;
                 }
                 
                 /* Responsive font size and padding adjustments (no transform scaling - handled by parent) */
@@ -397,7 +399,7 @@ export const InvoiceView: React.FC<InvoiceViewProps> = ({ invoice, companyInfo, 
             `}</style>
             <div className="w-full" style={{ width: '100%' }}>
                 {/* Company Header - Outside boxes */}
-                <div className="mb-6 pb-4" style={{ position: 'relative', width: '100%', overflow: 'visible', boxSizing: 'border-box' }}>
+                <div className="mb-6 pb-4 pt-6" style={{ position: 'relative', width: '100%', overflow: 'visible', boxSizing: 'border-box', paddingTop: '24px' }}>
                     {/* Company Name/Details Centered in Header */}
                     <div className="flex items-center justify-center mb-3" style={{ position: 'relative', width: '100%' }}>
                         {/* Logo - Optional, positioned on left */}
@@ -542,7 +544,7 @@ export const InvoiceView: React.FC<InvoiceViewProps> = ({ invoice, companyInfo, 
                                     
                                     return (
                                         <tr key={lr._id} className={hideTableBorders ? 'hover:bg-gray-50' : 'border-b border-gray-300 hover:bg-gray-50'}>
-                                            <td className={`p-2 ${hideTableBorders ? '' : 'border border-gray-300'} text-center text-sm`} title={lr.lrNumber || ''}>{lr.lrNumber || ''}</td>
+                                            <td className={`p-2 ${hideTableBorders ? '' : 'border border-gray-300'} text-center text-sm`} title={String(lr.lrNumber || '')}>{lr.lrNumber || ''}</td>
                                             <td className={`p-2 ${hideTableBorders ? '' : 'border border-gray-300'} text-center text-sm`}>{formatDate(lr.date)}</td>
                                             <td className={`p-2 ${hideTableBorders ? '' : 'border border-gray-300'} text-center text-sm`} title={lr.to || ''}>{lr.to || ''}</td>
                                             {hasReportingDate && (
@@ -782,10 +784,7 @@ export const InvoicePDF: React.FC<InvoicePDFProps> = ({ invoice, companyInfo, cu
             await printDocument('invoice-pdf-container', {
                 orientation: 'landscape',
                 scale: 'fit',
-                margins: 'minimum',
-                pageSize: 'A4',
-                printBackground: true,
-                preferCSSPageSize: true
+                margins: 'minimum'
             });
         } catch (error) {
             console.error('Print failed:', error);
