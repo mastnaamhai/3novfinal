@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: rambilas-backend
+    env: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MONGODB_URI
+        fromDatabase:
+          name: rambilas-mongodb
+          property: connectionString
+      - key: CORS_ORIGIN
+        value: https://ttruck.netlify.app
+      - key: JWT_SECRET
+        generateValue: true
+      - key: APP_PASSWORD_HASH
+        generateValue: true
+      - key: VITE_GSTIN_API_KEY
+        value: 6aa257a9cb3cc85897248e981fb99cfb
+
+databases:
+  - name: rambilas-mongodb
+    plan: free
